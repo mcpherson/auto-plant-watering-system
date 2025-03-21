@@ -42,6 +42,7 @@ const int MOISTPIN = A0;
 const int PUMPPIN = D16;
 // const int DUSTPIN = A2;
 
+int lastWatered;
 unsigned int lastTime;
 int buttonValue;
 int moistMid = 2500;
@@ -63,6 +64,7 @@ void getMoisture();
 void getDustLevel();
 void displayData(String timestamp);
 void publishData();
+void waterPlant();
 void MQTT_connect();
 bool MQTT_ping();
 
@@ -229,6 +231,18 @@ void publishData() {
   pressurePubFeed.publish(BMEData[1]);
   humidityPubFeed.publish(BMEData[2]);
   moisturePubFeed.publish(moisture);
+}
+
+void waterPlant() {
+  // only water if moisture is low and more than 10s have passed since last watering
+  if (moisture < 3000 && lastWatered + 10000 > millis()) {
+    digitalWrite(PUMPPIN, HIGH);
+    delay(500);
+    lastWatered = millis();
+  }
+  else {
+    digitalWrite(PUMPPIN, LOW);
+  }
 }
 
 // Function to connect and reconnect as necessary to the MQTT server.
