@@ -21,11 +21,13 @@ TCPClient TheClient;
 Adafruit_MQTT_SPARK mqtt(&TheClient,AIO_SERVER,AIO_SERVERPORT,AIO_USERNAME,AIO_KEY); 
 
 Adafruit_MQTT_Subscribe buttonSubFeed = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/button-on-off"); 
+Adafruit_MQTT_Subscribe resetSubFeed = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/midterm2-reset-button"); 
 Adafruit_MQTT_Subscribe emailSubFeed = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/email"); 
 Adafruit_MQTT_Publish temperaturePubFeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/midterm2-temperature");
 Adafruit_MQTT_Publish humidityPubFeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/midterm2-humidity");
 Adafruit_MQTT_Publish pressurePubFeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/midterm2-pressure");
 Adafruit_MQTT_Publish moisturePubFeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/midterm2-moisture");
+Adafruit_MQTT_Publish resetPubFeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/midterm2-reset-trigger");
 
 const byte BME_ADDRESS = 0x76;
 Adafruit_BME280 BME;
@@ -43,12 +45,14 @@ const int PUMPPIN = D16;
 // const int DUSTPIN = A2;
 
 int lastWatered;
+int lastMoisture = 1000;
 unsigned int lastTime;
-int buttonValue;
+int buttonValue, resetValue = 0;
 int moistMid = 2500;
 int dryness, dryMagnitude, moisture;
 String moistureState;
 String dateTime, m, d, timeOnly, yr;
+bool enabled = true;
 
 // dust sensor
 // unsigned long duration;
@@ -56,7 +60,7 @@ String dateTime, m, d, timeOnly, yr;
 // unsigned long dustSampleTime = 30000;
 // unsigned long lowPulseOccupancy = 0;
 // float ratio = 0;
-float concentration = 0;
+// float concentration = 0;
 
 String getTime();
 void bmeRead();
@@ -80,8 +84,8 @@ void setup() {
   Serial.printf("\n\n");
 
   // Setup MQTT subscription
-  // mqtt.subscribe(&emailSubFeed);
   mqtt.subscribe(&buttonSubFeed);
+  mqtt.subscribe(&resetSubFeed);
 
   Time.zone(-6);
   Particle.syncTime();
@@ -106,9 +110,10 @@ void loop() {
   MQTT_ping();
 
   // this is our 'wait for incoming subscription packets' busy subloop
+  // Can I functionize this? 
   Adafruit_MQTT_Subscribe *subscription;
   while ((subscription = mqtt.readSubscription(100))) {
-    if (subscription == &buttonSubFeed) {
+    if (subscription == &buttonSubFeed && enabled) {
       buttonValue = atoi((char *)buttonSubFeed.lastread);
       Serial.printf("Toggle: %i\n", buttonValue);
       if (buttonValue == 1) {
@@ -121,24 +126,29 @@ void loop() {
         digitalWrite(PUMPPIN, LOW);
       }
     }
-    // if (subscription == &brightnessSubFeed) {
-    //   brightnessValue = atoi((char *)brightnessSubFeed.lastread);
-    //   Serial.printf("Setting brightness to %i\n", brightnessValue);
-    //   analogWrite(LEDPIN2, brightnessValue);
-    // }
+    if (subscription == &resetSubFeed) {
+      resetValue = atoi((char *)resetSubFeed.lastread);
+      Serial.printf("Reset detected\n");
+      if (resetValue == 1) {
+        Serial.printf("Resetting...\n");
+        enabled = true;
+        lastMoisture = 1000;
+        resetPubFeed.publish(0);
+      }
+    }
   }
 
+  // todo: thread this
   // getDustLevel();
 
   // publish to Adafruit.io every 10 seconds
+  // Can I functionize this?
   if((millis() - lastTime > 10000)) {
     if(mqtt.Update()) {
-      String timestamp = getTime();
       bmeRead();
-      getMoisture();
-      displayData(timestamp);
+      getMoisture(); // plant is watered here
+      displayData(getTime());
       publishData();
-      Serial.printf("DRY: %i, WET: %i\n", dryness, moisture);
       } 
     lastTime = millis();
   }
@@ -176,7 +186,7 @@ void displayData(String timestamp) {
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
-  display.printf("  %s\n\nTemp:      %0.2f %cF\nHumidity:  %0.2f %%RH\nPressure:  %0.2f kPa\nDust:      %0.0fcf\nMoisture:  %s", timestamp.c_str(), BMEData[0], degreeSymbol, BMEData[2], BMEData[1], concentration, moistureState.c_str());
+  display.printf("  %s\n\nTemp:      %0.2f %cF\nHumidity:  %0.2f %%RH\nPressure:  %0.2f kPa\nMoisture:  %s", timestamp.c_str(), BMEData[0], degreeSymbol, BMEData[2], BMEData[1], moistureState.c_str());
   display.display();
 }
 
@@ -210,6 +220,7 @@ void getMoisture() {
     default:
       break;
   }
+  if (moisture < 2000 && enabled) { waterPlant(); }
 }
 
 // void getDustLevel() {
@@ -234,14 +245,23 @@ void publishData() {
 }
 
 void waterPlant() {
-  // only water if moisture is low and more than 10s have passed since last watering
-  if (moisture < 3000 && lastWatered + 10000 > millis()) {
+  // only water if moisture is low and more than 20s have passed since last watering
+  if (moisture < 2200 && lastWatered + 20000 > millis()) {
+    // lastMoisture is normally spoofed but is set to a real value after watering. If moisture hasn't changed much, "shut down" device and send a reset signal to Adafruit to trigger Zapier.
+    if (moisture - 50 < lastMoisture) {
+      // shut it down
+      enabled = false;
+      resetPubFeed.publish(1);
+    }
     digitalWrite(PUMPPIN, HIGH);
     delay(500);
     lastWatered = millis();
+    lastMoisture = moisture;
   }
   else {
     digitalWrite(PUMPPIN, LOW);
+    // guaranteed false for reset check next time it waters
+    lastMoisture = 1000; 
   }
 }
 
@@ -281,3 +301,9 @@ bool MQTT_ping() {
   }
   return pingStatus;
 }
+
+/*
+ * to do:
+ * testing
+ * hackster
+ */ 
