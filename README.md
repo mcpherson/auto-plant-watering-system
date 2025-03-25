@@ -1,9 +1,10 @@
 # auto-plant-watering-system
 
+This project measures and tracks soil moisture levels to automatically water a houseplant. It also displays the room's temperature, humidity, and atmospheric pressure on an OLED display. 
+
+For more information, check out the [project details on Hackster.io](https://www.hackster.io/marloncmcpherson/automatic-plant-watering-system-271efc).
 
 This firmware project was created using [Particle Developer Tools](https://www.particle.io/developer-tools/) and is compatible with all [Particle Devices](https://www.particle.io/devices/).
-
-Feel free to replace this README.md file with your own content, or keep it for reference.
 
 ## Table of Contents
 - [Introduction](#introduction)
